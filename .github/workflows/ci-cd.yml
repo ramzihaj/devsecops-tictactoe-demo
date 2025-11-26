@@ -77,6 +77,9 @@ jobs:
     name: Docker Build and Push
     runs-on: ubuntu-latest
     needs: [build]
+    permissions:
+      packages: write  # Grants write access to GHCR for this job
+      contents: read   # Allows reading the repo contents (already default, but explicit is good)
     env:
       REGISTRY: ghcr.io
       IMAGE_NAME: ${{ github.repository }}
