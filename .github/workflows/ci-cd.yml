@@ -150,41 +150,60 @@ jobs:
     runs-on: ubuntu-latest
     needs: [docker]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: write  # Ajout pour autoriser les pushes Git (sécurisé au job level)
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.TOKEN }}
-      
+          fetch-depth: 0  # Récupère l'historique complet pour pull/rebase
+
       - name: Setup Git config
         run: |
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-      
+
       - name: Update Kubernetes deployment file
         env:
           IMAGE_TAG: ${{ needs.docker.outputs.image_tag }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           REGISTRY: ghcr.io
         run: |
-          # Define the new image with tag
-          NEW_IMAGE="${REGISTRY}/${GITHUB_REPOSITORY}:${IMAGE_TAG}"
-          
-          # Update the deployment file (assuming it matches the pattern)
-          if sed -i "s|image: ${REGISTRY}/.*|image: ${NEW_IMAGE}|g" kubernetes/deployment.yaml; then
-            echo "Updated deployment to use image: ${NEW_IMAGE}"
-            grep -A 1 "image:" kubernetes/deployment.yaml
-          else
-            echo "No update needed or sed failed"
+          if [ -z "$IMAGE_TAG" ]; then
+            echo "IMAGE_TAG is empty, skipping update"
             exit 0
           fi
-      
+          
+          NEW_IMAGE="${REGISTRY}/${GITHUB_REPOSITORY}:${IMAGE_TAG}"
+          echo "Attempting to update with: $NEW_IMAGE"
+          
+          # Sauvegarde et update
+          cp kubernetes/deployment.yaml kubernetes/deployment.yaml.bak
+          if sed -i "s|image: ${REGISTRY}/[^ ]*|image: ${NEW_IMAGE}|g" kubernetes/deployment.yaml; then
+            echo "Updated successfully"
+            grep -A 1 "image:" kubernetes/deployment.yaml
+          else
+            echo "Sed failed, restoring backup"
+            mv kubernetes/deployment.yaml.bak kubernetes/deployment.yaml
+            exit 1
+          fi
+
       - name: Commit and push changes
         run: |
           git add kubernetes/deployment.yaml
           if git diff --staged --quiet; then
             echo "No changes to commit"
+            exit 0
+          fi
+          
+          # Synchronise avec remote avant commit/push
+          git pull origin main --rebase || (echo "Pull failed, aborting"; exit 1)
+          
+          # Commit si toujours des changements
+          if git diff --staged --quiet; then
+            echo "No changes after pull"
           else
             git commit -m "Update Kubernetes deployment with new image tag: ${IMAGE_TAG} [skip ci]"
-            git push
+            git push origin main
           fi
